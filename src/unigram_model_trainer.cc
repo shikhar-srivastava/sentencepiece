@@ -431,23 +431,16 @@ TrainerModel::SentencePieces Trainer::PruneSentencePieces(
     }
   }
 
-  // Second, segments all sentences to compute likelihood
-  // with a unigram language model. inverted[i] stores
-  // the set of sentence index where the sentencepieces[i] appears.
-  float vsum = 0.0;
+  // Second, segment all sentences to compute token frequencies
+  // with a unigram language model using the Viterbi path.
   std::vector<float> freq(sentencepieces.size(), 0.0);
-  std::vector<std::vector<int>> inverted(sentencepieces.size());
   {
-    std::vector<float> vsums(trainer_spec_.num_threads(), 0.0);
     std::vector<std::vector<float>> freqs(trainer_spec_.num_threads());
-    std::vector<std::vector<std::vector<int>>> inverteds(
-        trainer_spec_.num_threads());
 
     auto pool = std::make_unique<ThreadPool>(trainer_spec_.num_threads());
     pool->StartWorkers();
     for (int n = 0; n < trainer_spec_.num_threads(); ++n) {
       freqs[n].resize(sentencepieces.size(), 0.0);
-      inverteds[n].resize(sentencepieces.size());
 
       pool->Schedule([&, n]() {
         Lattice lattice;
@@ -456,11 +449,9 @@ TrainerModel::SentencePieces Trainer::PruneSentencePieces(
           const auto &w = sentences_[i];
           lattice.SetSentence(w.first);
           model.PopulateNodes(&lattice);
-          vsums[n] += w.second;
           for (const auto *node : lattice.Viterbi().first) {
             if (node->id >= 0) {
               freqs[n][node->id] += w.second;
-              inverteds[n][node->id].push_back(i);
             }
           }
         }
@@ -469,11 +460,8 @@ TrainerModel::SentencePieces Trainer::PruneSentencePieces(
     pool.reset(nullptr);
 
     for (int n = 0; n < trainer_spec_.num_threads(); ++n) {
-      vsum += vsums[n];
       for (size_t i = 0; i < sentencepieces.size(); ++i) {
         freq[i] += freqs[n][i];
-        std::copy(inverteds[n][i].begin(), inverteds[n][i].end(),
-                  std::back_inserter(inverted[i]));
       }
     }
   }
@@ -496,12 +484,6 @@ TrainerModel::SentencePieces Trainer::PruneSentencePieces(
       // no alternatives. Keeps this entry.
       new_sentencepieces.push_back(sentencepieces[i]);
     } else {
-      float F = 0.0;  // the frequency of sentencepieces[i].
-      for (const int n : inverted[i]) {
-        F += sentences_[n].second;
-      }
-      F /= vsum;  // normalizes by all sentence frequency.
-
       // The logprob with the sentencepiece[i].
       const float logprob_sp = std::log(static_cast<double>(freq[i])) - logsum;
 
@@ -520,6 +502,7 @@ TrainerModel::SentencePieces Trainer::PruneSentencePieces(
       }
 
       // loss: the diff of likelihood after removing the sentencepieces[i].
+      float F = freq[i] / sum;  // normalized token frequency
       const float loss = F * (logprob_sp - logprob_alt);
       candidates.emplace_back(i, loss);
     }
