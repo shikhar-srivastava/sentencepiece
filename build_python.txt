@@ -1,0 +1,43 @@
+# Build and Use SentencePiece Python with Rényi Entropy
+
+# 1. Build Python wheel
+conda activate tok
+cd /localdisk/ssrivas9/sentencepiece/python
+python setup.py bdist_wheel
+
+# 2. Install the wheel
+pip install dist/sentencepiece-0.2.2-cp310-cp310-linux_x86_64.whl --force-reinstall
+
+# 3. Verify installation
+python -c "import sentencepiece as spm; print(spm.__version__)"
+
+# 4. Use in Python (equivalent to command line)
+cat > train_example.py << 'EOF'
+import sentencepiece as spm
+
+spm.SentencePieceTrainer.train(
+    input='test_corpus.txt',
+    model_prefix='model',
+    vocab_size=40,
+    model_type='unigram',
+    target_renyi_entropy=3.5,
+    renyi_alpha=2.0,
+    entropy_distribution_type='EMPIRICAL_FREQUENCIES',
+    entropy_optimization_mode='ENTROPY_BOTH',
+    entropy_tolerance=0.005,
+    entropy_stagnation_threshold=5
+)
+EOF
+
+# 5. Run training
+python train_example.py
+
+# Parameter mapping (CLI -> Python):
+# --target_renyi_entropy          -> target_renyi_entropy
+# --renyi_alpha                   -> renyi_alpha
+# --entropy_distribution_type     -> entropy_distribution_type
+# --entropy_optimization_mode     -> entropy_optimization_mode
+# --entropy_tolerance             -> entropy_tolerance
+# --entropy_stagnation_threshold  -> entropy_stagnation_threshold
+
+

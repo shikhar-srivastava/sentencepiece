@@ -236,6 +236,47 @@ message TrainerSpec {
   // seed sentencepiece <tab> frequency per line.
   optional string seed_sentencepieces_file = 54 [default = ""];
 
+  ///////////////////////////////////////////////////////////////////
+  // Renyi entropy control parameters
+  //
+  // Target Renyi entropy value for the vocabulary. When set to a value > 0,
+  // the trainer will attempt to generate a vocabulary that achieves this
+  // target entropy. Set to 0 to disable entropy-based training.
+  optional float target_renyi_entropy = 55 [default = 0.0];
+
+  // Alpha parameter for Renyi entropy calculation.
+  // alpha = 1: Shannon entropy (standard information entropy)
+  // alpha = 2: Collision entropy (recommended)
+  // alpha = 0: Hartley entropy (log of vocabulary size)
+  optional float renyi_alpha = 56 [default = 2.0];
+
+  // Type of probability distribution to use for entropy calculation.
+  enum EntropyDistributionType {
+    MODEL_PROBABILITIES = 0;    // Use learned log-probabilities from model
+    EMPIRICAL_FREQUENCIES = 1;  // Use actual piece frequencies in tokenized corpus (recommended)
+  }
+  optional EntropyDistributionType entropy_distribution_type = 57 [default = EMPIRICAL_FREQUENCIES];
+
+  // Mode for entropy optimization during training (DEPRECATED - kept for compatibility).
+  // Now entropy optimization happens automatically via score adjustment after EM converges
+  // when target_renyi_entropy > 0. This field is ignored.
+  enum EntropyOptimizationMode {
+    ENTROPY_DISABLED = 0;              // No entropy constraint
+    ENTROPY_PRUNING_CONSTRAINT = 1;    // [DEPRECATED] Was: Modify pruning to target entropy
+    ENTROPY_STOPPING_CRITERION = 2;    // [DEPRECATED] Was: Stop when target entropy reached
+    ENTROPY_BOTH = 3;                  // [DEPRECATED] Was: Use both strategies
+  }
+  optional EntropyOptimizationMode entropy_optimization_mode = 58 [default = ENTROPY_DISABLED];
+
+  // Tolerance for entropy matching (e.g., 0.01 means ±1%).
+  // Score adjustment will stop when:
+  // |current_entropy - target_entropy| / target_entropy <= tolerance
+  optional float entropy_tolerance = 59 [default = 0.01];
+
+  // Maximum iterations for score adjustment phase (after EM converges).
+  // Score adjustment iteratively modifies piece probabilities to achieve target entropy.
+  optional int32 max_entropy_adjustment_iterations = 60 [default = 100];
+
   // Customized extensions: the range of field numbers
   // are open to third-party extensions.
   extensions 200 to max;

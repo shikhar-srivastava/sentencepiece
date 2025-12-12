@@ -105,6 +105,38 @@ class Trainer : public TrainerInterface {
   TrainerModel::SentencePieces FinalizeSentencePieces(
       const TrainerModel &model) const;
 
+  // Computes Renyi entropy of order alpha for the given probability distribution.
+  // For alpha = 1, computes Shannon entropy (limit case).
+  // For alpha = 2, computes collision entropy.
+  // probabilities: normalized probability distribution (must sum to 1.0)
+  // alpha: order of Renyi entropy
+  // Returns: Renyi entropy value in nats (natural logarithm base)
+  float ComputeRenyiEntropy(const std::vector<float> &probabilities,
+                            float alpha) const;
+
+  // Gets probability distribution based on the distribution_type setting.
+  // For MODEL_PROBABILITIES: uses learned log-probabilities from the model
+  // For EMPIRICAL_FREQUENCIES: tokenizes corpus and counts piece frequencies
+  // Returns: normalized probability distribution over vocabulary
+  std::vector<float> GetProbabilityDistribution(
+      const TrainerModel &model,
+      TrainerSpec::EntropyDistributionType type) const;
+
+  // Computes current entropy of the model using configured parameters.
+  // Uses trainer_spec settings for alpha and distribution type.
+  // Returns: current Renyi entropy value
+  float ComputeCurrentEntropy(const TrainerModel &model) const;
+
+  // Checks if current entropy is within tolerance of target entropy.
+  // Returns true if |current - target| / target <= tolerance
+  bool IsEntropyTargetMet(float current_entropy) const;
+
+  // Optimizes entropy by adjusting piece scores/probabilities.
+  // This runs after EM converges and directly modifies the model scores
+  // to achieve the target Rényi entropy while keeping vocabulary fixed.
+  // Returns: util::Status indicating success or failure
+  util::Status OptimizeEntropyViaScoreAdjustment(TrainerModel *model);
+
   // When the size of SentencePieces becomes less than desired_vocab_size_,
   // break the main training loop. desired_vocab_size_ = 1.1 * vocab_size_
   // for now.

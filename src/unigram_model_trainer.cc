@@ -508,7 +508,9 @@ TrainerModel::SentencePieces Trainer::PruneSentencePieces(
     }
   }
 
-  const int pruned_size =
+  // Revert to standard pruning (no entropy-based adjustment here)
+  // Entropy optimization now happens via score adjustment after EM converges
+  int pruned_size =
       std::max<int>(desired_vocab_size_,
                     trainer_spec_.shrinking_factor() * sentencepieces.size());
 
@@ -564,6 +566,128 @@ TrainerModel::SentencePieces Trainer::FinalizeSentencePieces(
   return Sorted(final_sentencepieces);
 }
 
+float Trainer::ComputeRenyiEntropy(const std::vector<float> &probabilities,
+                                    float alpha) const {
+  if (probabilities.empty()) {
+    return 0.0;
+  }
+
+  // Filter out zero probabilities
+  std::vector<float> non_zero_probs;
+  non_zero_probs.reserve(probabilities.size());
+  for (const float p : probabilities) {
+    if (p > 0.0) {
+      non_zero_probs.push_back(p);
+    }
+  }
+
+  if (non_zero_probs.empty()) {
+    return 0.0;
+  }
+
+  // Special case: alpha = 1 (Shannon entropy, limit case)
+  if (std::abs(alpha - 1.0) < 1e-6) {
+    double entropy = 0.0;
+    for (const float p : non_zero_probs) {
+      entropy -= p * std::log(static_cast<double>(p));
+    }
+    return static_cast<float>(entropy);
+  }
+
+  // Special case: alpha = 0 (Hartley entropy)
+  if (std::abs(alpha) < 1e-6) {
+    return std::log(static_cast<double>(non_zero_probs.size()));
+  }
+
+  // General case: H_alpha(P) = (1/(1-alpha)) * log(sum(p_i^alpha))
+  double sum_p_alpha = 0.0;
+  for (const float p : non_zero_probs) {
+    sum_p_alpha += std::pow(static_cast<double>(p), static_cast<double>(alpha));
+  }
+
+  if (sum_p_alpha <= 0.0) {
+    return 0.0;
+  }
+
+  const double entropy = std::log(sum_p_alpha) / (1.0 - alpha);
+  return static_cast<float>(entropy);
+}
+
+std::vector<float> Trainer::GetProbabilityDistribution(
+    const TrainerModel &model,
+    TrainerSpec::EntropyDistributionType type) const {
+  const auto &sentencepieces = model.GetSentencePieces();
+  std::vector<float> probabilities;
+
+  if (type == TrainerSpec::MODEL_PROBABILITIES) {
+    // Use learned log-probabilities from the model
+    probabilities.reserve(sentencepieces.size());
+    double sum = 0.0;
+    
+    // Convert log-probabilities to probabilities
+    for (const auto &piece : sentencepieces) {
+      const double prob = std::exp(static_cast<double>(piece.second));
+      probabilities.push_back(static_cast<float>(prob));
+      sum += prob;
+    }
+    
+    // Normalize to ensure they sum to 1.0
+    if (sum > 0.0) {
+      for (float &p : probabilities) {
+        p /= sum;
+      }
+    }
+  } else {  // EMPIRICAL_FREQUENCIES
+    // Tokenize corpus and count piece frequencies
+    probabilities.resize(sentencepieces.size(), 0.0);
+    
+    Lattice lattice;
+    int64_t total_count = 0;
+    
+    for (const auto &sentence : sentences_) {
+      lattice.SetSentence(sentence.first);
+      model.PopulateNodes(&lattice);
+      const auto viterbi_result = lattice.Viterbi();
+      
+      for (const auto *node : viterbi_result.first) {
+        if (node->id >= 0 && node->id < static_cast<int>(probabilities.size())) {
+          probabilities[node->id] += sentence.second;
+          total_count += sentence.second;
+        }
+      }
+    }
+    
+    // Normalize to get probabilities
+    if (total_count > 0) {
+      for (float &p : probabilities) {
+        p /= total_count;
+      }
+    }
+  }
+
+  return probabilities;
+}
+
+float Trainer::ComputeCurrentEntropy(const TrainerModel &model) const {
+  const auto distribution_type = trainer_spec_.entropy_distribution_type();
+  const float alpha = trainer_spec_.renyi_alpha();
+  
+  const auto probabilities = GetProbabilityDistribution(model, distribution_type);
+  return ComputeRenyiEntropy(probabilities, alpha);
+}
+
+bool Trainer::IsEntropyTargetMet(float current_entropy) const {
+  const float target = trainer_spec_.target_renyi_entropy();
+  const float tolerance = trainer_spec_.entropy_tolerance();
+  
+  if (target <= 0.0) {
+    return false;  // No target set
+  }
+  
+  const float relative_error = std::abs(current_entropy - target) / target;
+  return relative_error <= tolerance;
+}
+
 util::Status Trainer::Train() {
   RETURN_IF_ERROR(status());
 
@@ -586,6 +710,7 @@ util::Status Trainer::Train() {
 
   desired_vocab_size_ = static_cast<size_t>(trainer_spec_.vocab_size() * 1.1);
 
+  // Standard EM loop - entropy optimization happens after convergence
   while (true) {
     // Sub-EM iteration.
     for (int iter = 0; iter < trainer_spec_.num_sub_iterations(); ++iter) {
@@ -615,10 +740,125 @@ util::Status Trainer::Train() {
     model.SetSentencePieces(std::move(new_sentencepieces));
   }  // end of EM iteration
 
+  LOG(INFO) << "EM training completed. Vocabulary size: " << model.GetPieceSize();
+
+  // NEW: Score adjustment phase to optimize Rényi entropy
+  if (trainer_spec_.target_renyi_entropy() > 0.0) {
+    LOG(INFO) << "Starting entropy optimization via score adjustment";
+    LOG(INFO) << "Target entropy: " << trainer_spec_.target_renyi_entropy()
+              << " (alpha=" << trainer_spec_.renyi_alpha() << ")";
+    RETURN_IF_ERROR(OptimizeEntropyViaScoreAdjustment(&model));
+  }
+
   // Finally, adjusts the size of sentencepices to be |vocab_size|.
   final_pieces_ = FinalizeSentencePieces(model);
 
   return Save();
+}
+
+util::Status Trainer::OptimizeEntropyViaScoreAdjustment(TrainerModel *model) {
+  const float target_entropy = trainer_spec_.target_renyi_entropy();
+  const float tolerance = trainer_spec_.entropy_tolerance();
+  const int max_iterations = trainer_spec_.max_entropy_adjustment_iterations();
+  const float learning_rate = 0.05;  // How aggressively to adjust scores
+  
+  int iteration = 0;
+  while (iteration < max_iterations) {
+    // For score adjustment, we MUST use empirical frequencies to measure
+    // the actual effect of score changes on tokenization behavior.
+    // Model probabilities would just reflect the scores we changed, not the real impact.
+    std::vector<float> empirical_probs = GetProbabilityDistribution(
+        *model, TrainerSpec::EMPIRICAL_FREQUENCIES);
+    const float current_entropy = ComputeRenyiEntropy(
+        empirical_probs, trainer_spec_.renyi_alpha());
+    
+    LOG(INFO) << "Score adjustment iteration=" << iteration
+              << " current_entropy=" << current_entropy
+              << " target_entropy=" << target_entropy;
+    
+    // Check if target is met
+    if (IsEntropyTargetMet(current_entropy)) {
+      LOG(INFO) << "Target entropy achieved via score adjustment!";
+      LOG(INFO) << "Final entropy: " << current_entropy 
+                << " (target: " << target_entropy << ")";
+      return util::OkStatus();
+    }
+    
+    // Determine adjustment direction
+    const float entropy_ratio = current_entropy / target_entropy;
+    const bool need_increase_entropy = (entropy_ratio < (1.0 - tolerance));
+    const bool need_decrease_entropy = (entropy_ratio > (1.0 + tolerance));
+    
+    if (!need_increase_entropy && !need_decrease_entropy) {
+      // Within tolerance but IsEntropyTargetMet returned false 
+      // (edge case, should not happen)
+      LOG(INFO) << "Entropy within tolerance. Stopping.";
+      return util::OkStatus();
+    }
+    
+    // Get current pieces
+    auto sentencepieces = model->GetSentencePieces();
+    
+    // Adjust scores based on entropy direction
+    if (need_increase_entropy) {
+      // To INCREASE entropy: make distribution more UNIFORM
+      // Strategy: boost rare pieces, penalize common pieces
+      LOG(INFO) << "Increasing entropy (current=" << current_entropy 
+                << " < target=" << target_entropy << ")";
+      
+      for (size_t i = 0; i < sentencepieces.size(); ++i) {
+        const float freq = empirical_probs[i];
+        const float mean_freq = 1.0f / static_cast<float>(sentencepieces.size());
+        
+        // If piece is rarer than average, boost its score (make it more likely)
+        // If piece is more common than average, reduce its score (make it less likely)
+        const float freq_deviation = (mean_freq - freq) / mean_freq;
+        const float score_adjustment = learning_rate * freq_deviation;
+        
+        sentencepieces[i].second += score_adjustment;  // score is log-probability
+      }
+    } else {
+      // To DECREASE entropy: make distribution more SKEWED
+      // Strategy: boost common pieces, penalize rare pieces
+      LOG(INFO) << "Decreasing entropy (current=" << current_entropy 
+                << " > target=" << target_entropy << ")";
+      
+      for (size_t i = 0; i < sentencepieces.size(); ++i) {
+        const float freq = empirical_probs[i];
+        const float mean_freq = 1.0f / static_cast<float>(sentencepieces.size());
+        
+        // If piece is more common than average, boost its score
+        // If piece is rarer than average, reduce its score
+        const float freq_deviation = (freq - mean_freq) / mean_freq;
+        const float score_adjustment = learning_rate * freq_deviation;
+        
+        sentencepieces[i].second += score_adjustment;  // score is log-probability
+      }
+    }
+    
+    // Update model with adjusted scores
+    model->SetSentencePieces(std::move(sentencepieces));
+    
+    iteration++;
+    
+    // Check for stagnation
+    if (iteration > 10) {
+      // After 10 iterations without reaching target, check if we're making progress
+      if (iteration % 10 == 0) {
+        LOG(WARNING) << "Score adjustment iteration " << iteration 
+                     << " without reaching target. Current entropy: " << current_entropy;
+      }
+    }
+  }
+  
+  // Reached max iterations without achieving target
+  const float final_entropy = ComputeCurrentEntropy(*model);
+  LOG(WARNING) << "Score adjustment reached max iterations (" << max_iterations << ")";
+  LOG(WARNING) << "Final entropy: " << final_entropy 
+               << " (target: " << target_entropy << ")";
+  LOG(WARNING) << "Target may be unreachable for this corpus/vocabulary combination";
+  
+  return util::OkStatus();  // Return OK even if target not reached
 }
 }  // namespace unigram
 }  // namespace sentencepiece

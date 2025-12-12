@@ -1,0 +1,42 @@
+# Essential Build Commands for Rényi Entropy Implementation
+
+# 1. Activate conda environment
+conda activate tok
+
+# 2. If you modified src/sentencepiece_model.proto, regenerate proto files:
+cd /tmp
+wget -q https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/protoc-3.14.0-linux-x86_64.zip
+unzip -q protoc-3.14.0-linux-x86_64.zip -d protoc-3.14
+cd /localdisk/ssrivas9/sentencepiece/src
+/tmp/protoc-3.14/bin/protoc --cpp_out=lite:builtin_pb sentencepiece_model.proto
+
+# 3. Build the project
+cd /localdisk/ssrivas9/sentencepiece
+conda activate tok
+rm -rf build && mkdir build && cd build
+cmake ..
+make -j$(nproc)
+
+# 4. Verify build
+./src/spm_train --help | grep entropy
+
+# 5. Test training (optional)
+cd /localdisk/ssrivas9/sentencepiece
+cat > test_corpus.txt << 'EOF'
+hello world this is a test
+sentence piece tokenizer training
+machine learning natural language processing
+EOF
+
+./build/src/spm_train \
+  --input=test_corpus.txt \
+  --model_prefix=test_model \
+  --vocab_size=40 \
+  --model_type=unigram \
+  --target_renyi_entropy=3.5 \
+  --renyi_alpha=2.0 \
+  --entropy_distribution_type=EMPIRICAL_FREQUENCIES \
+  --entropy_optimization_mode=ENTROPY_BOTH \
+  --entropy_tolerance=0.005 \
+  --entropy_stagnation_threshold=5
+

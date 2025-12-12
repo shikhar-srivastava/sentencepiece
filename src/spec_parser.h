@@ -249,6 +249,28 @@ util::Status SentencePieceTrainer::SetProtoField(absl::string_view name,
   PARSE_DOUBLE(differential_privacy_noise_level);
   PARSE_UINT64(differential_privacy_clipping_threshold);
 
+  // Renyi entropy parameters
+  PARSE_DOUBLE(target_renyi_entropy);
+  PARSE_DOUBLE(renyi_alpha);
+  PARSE_DOUBLE(entropy_tolerance);
+  PARSE_INT32(max_entropy_adjustment_iterations);
+
+  static const std::map<std::string, TrainerSpec::EntropyDistributionType>
+      kEntropyDistributionType_Map = {
+          {"MODEL_PROBABILITIES", TrainerSpec::MODEL_PROBABILITIES},
+          {"EMPIRICAL_FREQUENCIES", TrainerSpec::EMPIRICAL_FREQUENCIES},
+  };
+  PARSE_ENUM(entropy_distribution_type, kEntropyDistributionType_Map);
+
+  static const std::map<std::string, TrainerSpec::EntropyOptimizationMode>
+      kEntropyOptimizationMode_Map = {
+          {"ENTROPY_DISABLED", TrainerSpec::ENTROPY_DISABLED},
+          {"ENTROPY_PRUNING_CONSTRAINT", TrainerSpec::ENTROPY_PRUNING_CONSTRAINT},
+          {"ENTROPY_STOPPING_CRITERION", TrainerSpec::ENTROPY_STOPPING_CRITERION},
+          {"ENTROPY_BOTH", TrainerSpec::ENTROPY_BOTH},
+  };
+  PARSE_ENUM(entropy_optimization_mode, kEntropyOptimizationMode_Map);
+
   return util::StatusBuilder(util::StatusCode::kNotFound, GTL_LOC)
          << "unknown field name \"" << name << "\" in TrainerSpec.";
 }

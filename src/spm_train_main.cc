@@ -162,6 +162,34 @@ ABSL_FLAG(std::uint64_t, differential_privacy_clipping_threshold, 0,
           "Threshold for"
           " clipping the counts for DP");
 
+// Renyi entropy related flags.
+ABSL_FLAG(float, target_renyi_entropy, 0.0f,
+          "Target Renyi entropy for vocabulary. Set to 0 to disable "
+          "entropy-based optimization. The trainer will attempt to generate "
+          "a vocabulary that achieves this target entropy value.");
+ABSL_FLAG(float, renyi_alpha, 2.0f,
+          "Alpha parameter for Renyi entropy calculation. "
+          "alpha=1: Shannon entropy, alpha=2: Collision entropy (default), "
+          "alpha=0: Hartley entropy (log of vocab size)");
+ABSL_FLAG(std::string, entropy_distribution_type, "EMPIRICAL_FREQUENCIES",
+          "Distribution type for entropy calculation. "
+          "Choose from MODEL_PROBABILITIES (uses learned log-probabilities) or "
+          "EMPIRICAL_FREQUENCIES (uses actual piece frequencies in corpus, recommended)");
+ABSL_FLAG(std::string, entropy_optimization_mode, "ENTROPY_DISABLED",
+          "Entropy optimization mode. "
+          "Choose from ENTROPY_DISABLED (no entropy constraint), "
+          "ENTROPY_PRUNING_CONSTRAINT (modify pruning to target entropy), "
+          "ENTROPY_STOPPING_CRITERION (stop when target reached), or "
+          "ENTROPY_BOTH (use both strategies)");
+ABSL_FLAG(float, entropy_tolerance, 0.01f,
+          "Tolerance for entropy matching. E.g., 0.01 means ±1%. "
+          "Training considers target met when "
+          "|current_entropy - target_entropy| / target_entropy <= tolerance");
+ABSL_FLAG(int32_t, max_entropy_adjustment_iterations, 100,
+          "Maximum iterations for score adjustment phase to optimize entropy. "
+          "After EM converges, scores are iteratively adjusted to match target entropy. "
+          "Higher values allow more refinement but take longer.");
+
 int main(int argc, char *argv[]) {
   sentencepiece::ScopedResourceDestructor cleaner;
   sentencepiece::ParseCommandLineFlags(argv[0], &argc, &argv, true);
@@ -261,6 +289,49 @@ int main(int argc, char *argv[]) {
   SetTrainerSpecFromFlag(enable_differential_privacy);
   SetTrainerSpecFromFlag(differential_privacy_noise_level);
   SetTrainerSpecFromFlag(differential_privacy_clipping_threshold);
+
+  // Renyi entropy related.
+  SetTrainerSpecFromFlag(target_renyi_entropy);
+  SetTrainerSpecFromFlag(renyi_alpha);
+  SetTrainerSpecFromFlag(entropy_tolerance);
+  SetTrainerSpecFromFlag(max_entropy_adjustment_iterations);
+  
+  // Parse entropy distribution type enum
+  {
+    const std::string dist_type = absl::GetFlag(FLAGS_entropy_distribution_type);
+    if (dist_type == "MODEL_PROBABILITIES") {
+      trainer_spec.set_entropy_distribution_type(
+          TrainerSpec::MODEL_PROBABILITIES);
+    } else if (dist_type == "EMPIRICAL_FREQUENCIES") {
+      trainer_spec.set_entropy_distribution_type(
+          TrainerSpec::EMPIRICAL_FREQUENCIES);
+    } else {
+      LOG(FATAL) << "Invalid entropy_distribution_type: " << dist_type
+                 << ". Choose from MODEL_PROBABILITIES or EMPIRICAL_FREQUENCIES";
+    }
+  }
+  
+  // Parse entropy optimization mode enum
+  {
+    const std::string opt_mode = absl::GetFlag(FLAGS_entropy_optimization_mode);
+    if (opt_mode == "ENTROPY_DISABLED") {
+      trainer_spec.set_entropy_optimization_mode(
+          TrainerSpec::ENTROPY_DISABLED);
+    } else if (opt_mode == "ENTROPY_PRUNING_CONSTRAINT") {
+      trainer_spec.set_entropy_optimization_mode(
+          TrainerSpec::ENTROPY_PRUNING_CONSTRAINT);
+    } else if (opt_mode == "ENTROPY_STOPPING_CRITERION") {
+      trainer_spec.set_entropy_optimization_mode(
+          TrainerSpec::ENTROPY_STOPPING_CRITERION);
+    } else if (opt_mode == "ENTROPY_BOTH") {
+      trainer_spec.set_entropy_optimization_mode(
+          TrainerSpec::ENTROPY_BOTH);
+    } else {
+      LOG(FATAL) << "Invalid entropy_optimization_mode: " << opt_mode
+                 << ". Choose from ENTROPY_DISABLED, ENTROPY_PRUNING_CONSTRAINT, "
+                 << "ENTROPY_STOPPING_CRITERION, or ENTROPY_BOTH";
+    }
+  }
 
   SetRepeatedTrainerSpecFromFile(control_symbols);
   SetRepeatedTrainerSpecFromFile(user_defined_symbols);

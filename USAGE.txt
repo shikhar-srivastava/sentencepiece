@@ -1,0 +1,237 @@
+# Rényi Entropy-Constrained Unigram Tokenizer - Parameter Reference
+
+## Entropy-Related Parameters
+
+### --target_renyi_entropy
+**Type:** float  
+**Default:** 0.0  
+**Description:** Target Rényi entropy value for the vocabulary. The trainer will attempt to generate a vocabulary that achieves this target entropy value.
+
+**Possible Values:**
+- `0.0` - Disables entropy-based optimization (default)
+- Any positive float value - Target entropy to achieve (e.g., `10.5`, `8.0`, `12.3`)
+
+**Usage:**
+```bash
+--target_renyi_entropy=10.5
+```
+
+**Notes:**
+- Must be > 0.0 to enable entropy optimization
+- Typical values depend on vocabulary size and corpus characteristics
+- For vocab_size=8000, typical range is 8-12
+- For smaller vocabularies, expect lower entropy values
+
+
+### --renyi_alpha
+**Type:** float  
+**Default:** 2.0  
+**Description:** Alpha parameter (α) for Rényi entropy calculation. Controls which type of entropy is computed.
+
+**Possible Values:**
+- `0.0` - Hartley entropy: H₀(P) = log(|vocabulary_size|). Only depends on vocabulary size, not probabilities.
+- `1.0` - Shannon entropy: H₁(P) = -Σ pᵢ log(pᵢ). Standard information entropy (limit case).
+- `2.0` - Collision entropy: H₂(P) = -log(Σ pᵢ²). Probability of two random samples being the same (default, recommended).
+- Any positive float ≠ 1.0 - General Rényi entropy: H_α(P) = (1/(1-α)) × log(Σ pᵢ^α)
+
+**Usage:**
+```bash
+--renyi_alpha=2.0    # Collision entropy (recommended)
+--renyi_alpha=1.0    # Shannon entropy
+--renyi_alpha=0.0    # Hartley entropy
+--renyi_alpha=3.0    # Higher-order Rényi entropy
+```
+
+**Notes:**
+- α = 2.0 is recommended for most use cases (good balance of sensitivity and stability)
+- Higher α values emphasize the most frequent tokens
+- Lower α values (but > 0) emphasize rare tokens
+- α = 1 is a special limit case (Shannon entropy)
+
+
+### --entropy_distribution_type
+**Type:** string  
+**Default:** "EMPIRICAL_FREQUENCIES"  
+**Description:** Type of probability distribution to use when calculating entropy.
+
+**Possible Values:**
+- `MODEL_PROBABILITIES` - Uses the learned log-probabilities (scores) from the Unigram language model. These are the model parameters P(piece) learned during EM training. Faster to compute as it doesn't require tokenizing the corpus.
+- `EMPIRICAL_FREQUENCIES` - Uses actual piece frequencies observed when tokenizing the training corpus. More accurate representation of real-world usage. Recommended for evaluation and production use.
+
+**Usage:**
+```bash
+--entropy_distribution_type=EMPIRICAL_FREQUENCIES    # Recommended
+--entropy_distribution_type=MODEL_PROBABILITIES      # Faster
+```
+
+**Notes:**
+- EMPIRICAL_FREQUENCIES is more accurate but slower (requires corpus tokenization)
+- MODEL_PROBABILITIES is faster but may not reflect actual usage patterns
+- For evaluation and reproducibility, use EMPIRICAL_FREQUENCIES
+- For quick experiments during development, MODEL_PROBABILITIES is acceptable
+
+
+### --entropy_optimization_mode
+**Type:** string  
+**Default:** "ENTROPY_DISABLED"  
+**Description:** Strategy for how entropy constraints are applied during training.
+
+**Possible Values:**
+- `ENTROPY_DISABLED` - No entropy constraint applied. Training proceeds normally with standard vocabulary size-based stopping (default).
+- `ENTROPY_PRUNING_CONSTRAINT` - Adjusts pruning decisions based on entropy feedback. When entropy is below target, keeps more pieces; when above target, prunes more aggressively. Gradual adjustment over multiple iterations.
+- `ENTROPY_STOPPING_CRITERION` - Stops training when target entropy is reached (within tolerance). Works alongside or instead of vocabulary size criterion.
+- `ENTROPY_BOTH` - Uses both pruning constraint and stopping criterion. Most effective for achieving target entropy quickly and accurately. Recommended when using entropy optimization.
+
+**Usage:**
+```bash
+--entropy_optimization_mode=ENTROPY_DISABLED              # No entropy optimization
+--entropy_optimization_mode=ENTROPY_PRUNING_CONSTRAINT     # Adjust pruning only
+--entropy_optimization_mode=ENTROPY_STOPPING_CRITERION    # Stop when reached
+--entropy_optimization_mode=ENTROPY_BOTH                  # Recommended
+```
+
+**Notes:**
+- ENTROPY_BOTH provides fastest convergence to target entropy
+- ENTROPY_PRUNING_CONSTRAINT is useful for fine-tuning without early stopping
+- ENTROPY_STOPPING_CRITERION is useful when you want exact entropy match
+- Must set --target_renyi_entropy > 0.0 for any mode except ENTROPY_DISABLED
+
+
+### --entropy_tolerance
+**Type:** float  
+**Default:** 0.01  
+**Description:** Relative tolerance for entropy matching. Determines when the target entropy is considered "met".
+
+**Possible Values:**
+- Any float between 0.0 and 1.0 - Relative tolerance as a fraction
+- `0.01` - ±1% tolerance (default)
+- `0.05` - ±5% tolerance (more permissive)
+- `0.001` - ±0.1% tolerance (very strict)
+
+**Usage:**
+```bash
+--entropy_tolerance=0.01    # ±1% (default, recommended)
+--entropy_tolerance=0.05    # ±5% (more permissive, faster convergence)
+--entropy_tolerance=0.001   # ±0.1% (very strict, may take longer)
+```
+
+**Formula:**
+Training considers target met when:
+```
+|current_entropy - target_entropy| / target_entropy <= tolerance
+```
+
+**Example:**
+- Target: 10.0, Tolerance: 0.01
+- Acceptable range: [9.9, 10.1]
+- If current_entropy = 10.05, target is met (|10.05 - 10.0| / 10.0 = 0.005 ≤ 0.01)
+
+**Notes:**
+- Lower tolerance = more precise but may take longer to converge
+- Higher tolerance = faster convergence but less precise
+- Used by both pruning constraint and stopping criterion
+- Recommended: 0.01 (1%) for most use cases
+
+
+### --entropy_stagnation_threshold
+**Type:** int32  
+**Default:** 5  
+**Description:** Early stopping threshold for entropy stagnation. Training automatically stops if entropy doesn't improve by at least 0.1% for this many consecutive iterations. This prevents wasting computation when entropy has reached its natural limit or the target is unreachable.
+
+**Possible Values:**
+- `0` - Disables stagnation-based early stopping
+- `3` - Aggressive stopping (stops quickly if no progress)
+- `5` - Balanced stopping (default, recommended)
+- `10` - Conservative stopping (waits longer before stopping)
+- Any positive integer - Number of iterations to wait
+
+**Usage:**
+```bash
+--entropy_stagnation_threshold=5    # Stop after 5 iterations without improvement (default)
+--entropy_stagnation_threshold=3    # Stop after 3 iterations (aggressive)
+--entropy_stagnation_threshold=10   # Stop after 10 iterations (conservative)
+--entropy_stagnation_threshold=0    # Disable early stopping
+```
+
+**How It Works:**
+1. After each EM iteration, checks if entropy changed by at least 0.1%
+2. If change < 0.1%, increments stagnation counter
+3. If stagnation counter reaches threshold, stops training early
+4. If entropy improves by ≥0.1%, resets counter to 0
+
+**When It Triggers:**
+- Target entropy is unreachable for the corpus (e.g., too high due to Zipf's law)
+- Entropy has naturally converged to its maximum for the data
+- No further improvements possible with current vocabulary
+
+**Example Behavior:**
+```
+EM iteration=10 current_entropy=4.93247 target_entropy=8.5
+Entropy stagnation detected (change=0.00001). Stagnation count: 1/5
+...
+EM iteration=14 current_entropy=4.93248 target_entropy=8.5
+Entropy has not improved for 5 iterations. Stopping training (early stop).
+Final vocab size: 143908 Final entropy: 4.93248 (target: 8.5)
+```
+
+**Notes:**
+- Prevents infinite loops when target entropy is unreachable
+- Saves computation time by stopping when no progress is being made
+- Recommended: Keep at default (5) for most use cases
+- Set to 0 only for debugging or when you want to see full training behavior
+- Works with all entropy optimization modes
+
+
+## Complete Example
+
+```bash
+./build/src/spm_train \
+  --input=corpus.txt \
+  --model_prefix=model \
+  --vocab_size=8000 \
+  --model_type=unigram \
+  --target_renyi_entropy=10.5 \
+  --renyi_alpha=2.0 \
+  --entropy_distribution_type=EMPIRICAL_FREQUENCIES \
+  --entropy_optimization_mode=ENTROPY_BOTH \
+  --entropy_tolerance=0.01 \
+  --entropy_stagnation_threshold=5
+```
+
+This will train a Unigram tokenizer that:
+- Targets Rényi entropy (α=2, collision entropy) of 10.5
+- Uses empirical frequencies for accurate measurement
+- Applies both pruning adjustments and stopping criterion
+- Considers target met when within ±1% of 10.5
+- Stops early if entropy stagnates for 5 iterations
+
+
+## Parameter Dependencies
+
+1. **Entropy optimization requires:**
+   - `--target_renyi_entropy > 0.0`
+   - `--entropy_optimization_mode != ENTROPY_DISABLED`
+
+2. **All entropy parameters work together:**
+   - `--renyi_alpha` determines which entropy formula is used
+   - `--entropy_distribution_type` determines how probabilities are obtained
+   - `--entropy_optimization_mode` determines how constraints are applied
+   - `--entropy_tolerance` determines precision of matching
+
+3. **Compatible with standard parameters:**
+   - Works with all standard `spm_train` parameters
+   - `--vocab_size` still applies (training stops at either vocab size OR entropy target)
+   - All other training parameters (--num_threads, --shrinking_factor, etc.) work normally
+
+
+## Quick Reference
+
+| Parameter | Type | Default | Key Values |
+|-----------|------|---------|------------|
+| `--target_renyi_entropy` | float | 0.0 | > 0.0 to enable |
+| `--renyi_alpha` | float | 2.0 | 0.0, 1.0, 2.0, or any > 0 |
+| `--entropy_distribution_type` | string | EMPIRICAL_FREQUENCIES | MODEL_PROBABILITIES, EMPIRICAL_FREQUENCIES |
+| `--entropy_optimization_mode` | string | ENTROPY_DISABLED | ENTROPY_DISABLED, ENTROPY_PRUNING_CONSTRAINT, ENTROPY_STOPPING_CRITERION, ENTROPY_BOTH |
+| `--entropy_tolerance` | float | 0.01 | 0.001 to 0.1 (recommended: 0.01) |
+| `--entropy_stagnation_threshold` | int32 | 5 | 0 to disable, 3-10 recommended |
+

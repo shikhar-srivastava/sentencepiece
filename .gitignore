@@ -75,3 +75,8 @@ _sentencepiece.*.so
 third_party/abseil-cpp
 
 python/sentencepiece
+*.model
+*.vocab
+NEW_SCORE_ADJUSTMENT_APPROACH.md
+RENYI_ENTROPY_IMPLEMENTATION.md
+ENTROPY_TOLERANCE_FIX.md

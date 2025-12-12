@@ -1,0 +1,5 @@
+hello world this is a test
+sentence piece tokenizer training
+machine learning natural language processing
+subword tokenization is useful
+neural networks require tokenization
