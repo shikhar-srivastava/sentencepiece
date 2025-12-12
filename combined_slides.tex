@@ -328,7 +328,86 @@
     \end{alertblock}
 \end{frame}
 
-\begin{frame}{5.2 Why Empirical Frequencies?}
+\begin{frame}{5.2 Limits of Rényi Efficiency for Unigram}
+    \centering
+    \textbf{The Landscape of Tokenization Entropy ($V$ = Fixed Vocabulary Size)}
+    
+    \vspace{0.5cm}
+    
+    \begin{tikzpicture}[xscale=1.1, yscale=1]
+        % --- Styles ---
+        \tikzstyle{marker}=[circle, fill=DeepBlue, inner sep=2pt]
+        \tikzstyle{labelnode}=[font=\scriptsize, align=center]
+        
+        % --- 1. Theoretical Axis ---
+        \draw[->, thick, black!60] (0,0) -- (10.5,0) node[right] {\footnotesize $H_\alpha$};
+        
+        % Theoretical Min/Max Labels
+        \draw[thick] (0, -0.2) -- (0, 0.2);
+        \node[labelnode, below=0.3cm] at (0,0) {Theoretical Min\\$0$ nats\\(Degenerate)};
+        
+        \draw[thick] (10, -0.2) -- (10, 0.2);
+        \node[labelnode, below=0.3cm] at (10,0) {Theoretical Max\\$\log(V)$ nats\\(Uniform)};
+        
+        % --- 2. Achievable Region (The "Zipf Barrier") ---
+        % Natural language cannot be perfectly uniform due to grammar/Zipf's law
+        \fill[PathGreen!20, rounded corners] (3, -0.25) rectangle (8, 0.25);
+        \node[font=\tiny, text=PathGreen!60!black] at (5.5, 0.45) {\textbf{Achievable Region (Corpus Constraint)}};
+        
+        % --- 3. Points of Interest ---
+        
+        % Standard Unigram
+        \node[marker, fill=AlertRed] (std) at (4.5, 0) {};
+        \node[labelnode, text=AlertRed, above=0.5cm] (std_label) at (4.5,0) {\textbf{Default Unigram}\\(Likelihood Only)};
+        \draw[dotted, thick, AlertRed] (std) -- (std_label);
+        
+        % Min Achievable
+        \draw[thick, DeepBlue] (3, -0.15) -- (3, 0.15);
+        \node[labelnode, below=0.1cm, font=\tiny, text=DeepBlue] at (3,-0.25) {Min\\Achievable};
+        
+        % Max Achievable
+        \draw[thick, DeepBlue] (8, -0.15) -- (8, 0.15);
+        \node[labelnode, below=0.1cm, font=\tiny, text=DeepBlue] at (8,-0.25) {Max\\Achievable};
+        
+        % --- 4. The Target Question ---
+        \draw[<->, thick, AccentBlue] (3, -1.2) -- (8, -1.2) node[midway, fill=white, text=AccentBlue] {Target Range?};
+        \node[font=\small, text=AccentBlue, align=center] at (5.5, -1.8) {\textit{"Where do we want to be on this spectrum?"}};
+        
+    \end{tikzpicture}
+\end{frame}
+
+\begin{frame}{5.3 Achieving the Target Range}
+    \begin{columns}[T]
+        \begin{column}{0.5\textwidth}
+            \begin{block}{The Challenge}
+                \begin{itemize}
+                    \item \textbf{Theoretical Max} is unreachable because language follows a Power Law (Zipf).
+                    \item \textbf{Default Unigram} naturally clusters near the lower end to minimize encoded length.
+                \end{itemize}
+            \end{block}
+        \end{column}
+        
+        \begin{column}{0.48\textwidth}
+            \begin{alertblock}{The Strategy (Hint)}
+                To move the needle along the spectrum:
+                \vspace{0.2cm}
+                
+                \textbf{1. To Increase Entropy ($\to$):} 
+                Penalize frequent tokens, forcing the model to use a wider variety of pieces.
+                
+                \vspace{0.2cm}
+                \textbf{2. To Decrease Entropy ($\leftarrow$):}
+                Reward frequent tokens, concentrating mass on a smaller core vocabulary.
+            \end{alertblock}
+        \end{column}
+    \end{columns}
+    
+    \vspace{0.5cm}
+    \centering
+    \textit{We achieve this by iteratively adjusting piece scores ($P_{model}$) \\ until the measured Empirical Entropy matches the target.}
+\end{frame}
+
+\begin{frame}{5.4 Why Empirical Frequencies?}
     The code intentionally ignores the model's internal probability parameters ($P_{model}$) and instead measures the \textbf{actual usage} of tokens ($P_{empirical}$) via Viterbi.
     
     \vspace{0.3cm}
@@ -340,7 +419,7 @@
     \end{itemize}
 \end{frame}
 
-\begin{frame}[fragile]{5.3 The Adjustment Algorithm (Gradient-like)}
+\begin{frame}[fragile]{5.5 The Adjustment Algorithm (Gradient-like)}
     \textbf{File:} \texttt{src/unigram\_model\_trainer.cc} :: \texttt{OptimizeEntropyViaScoreAdjustment}
     
     We shift token scores based on their deviation from the Mean Frequency ($\mu$).
@@ -371,3 +450,4 @@
 \end{frame}
 
 \end{document}
+
